@@ -26,7 +26,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 //MongoDB imports
 import com.mongodb.MongoClient;
+import com.mongodb.client.MongoCollection;
+import com.mongodb.client.MongoDatabase;
 import com.mongodb.DB;
+import org.bson.Document;
 
 import org.isaseb.utils.TimedRankQueue;
 /**
@@ -70,7 +73,6 @@ public class HashTrends {
 	    Authentication auth = new OAuth1(consumerKey, consumerSecret, token, secret);
 	    //Authentication auth = new com.twitter.hbc.httpclient.auth.BasicAuth(username, password);
 
-	    System.out.println ("StreamRankQueue run");
 	    // Create a new BasicClient. By default gzip is enabled.
 	    BasicClient client = new ClientBuilder()
 	            .name("hashtrends")
@@ -86,6 +88,16 @@ public class HashTrends {
 	    ObjectMapper mapper = new ObjectMapper();
 	    TimedRankQueue<String> hashtagRankQueue = new TimedRankQueue<String>(trendSec);
 	    TimedRankQueue<String> usernameRankQueue = new TimedRankQueue<String>(10);
+
+	    // MongoDB setup
+	    MongoClient mongoClient = new MongoClient("localhost");
+        MongoDatabase database = mongoClient.getDatabase("hashtrends");
+        
+        // get a handle to the "test" collection
+        MongoCollection<Document> collection = database.getCollection("hashranks");
+
+        // drop all the data in it
+        collection.drop();
 
 	    // Do whatever needs to be done with messages
 	    while (stopping == false) {
@@ -139,6 +151,21 @@ public class HashTrends {
 	                	
 	                	List<Map.Entry<String,Integer>> list = hashtagRankQueue.getRank();
 	                	printRankList(list, 40);
+
+	                	// make a document and insert it into MongoDB
+/*	                    Document doc = new Document("name", "MongoDB")
+	                                   .append("type", "database")
+	                                   .append("count", 1)
+	                                   .append("info", new Document("x", 203).append("y", 102));
+*/
+	                	Document doc = new Document();
+
+	                	for (int i = 0; i < 40 && i < list.size(); i++) {
+	                		doc.append(list.get(i).getKey().replace(".", ""), list.get(i).getValue());
+	                	}
+
+//	                	Document doc = new Document(list.get(0).getKey(), list.get(0).getValue());
+	                    collection.insertOne(doc);
 	                }
 	            }
 	        }
