@@ -26,12 +26,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 //MongoDB imports
 import com.mongodb.MongoClient;
+import com.mongodb.client.ListIndexesIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
-import com.mongodb.operation.FindAndDeleteOperation;
+import com.mongodb.client.model.IndexOptions;
 
 import org.bson.Document;
-import org.bson.conversions.Bson;
 import org.isaseb.utils.TimedRankQueue;
 /**
  * @author edgar
@@ -84,25 +84,34 @@ public class HashTrends {
 	            .build();
 
 	    // Establish a connection
-	    client.connect();
+    	client.connect();
 
 	    ObjectMapper mapper = new ObjectMapper();
 	    TimedRankQueue<String> hashtagRankQueue = new TimedRankQueue<String>(trendSec);
 	    TimedRankQueue<String> usernameRankQueue = new TimedRankQueue<String>(10);
+
+        Document hashtagQueueFilter = new Document ("info", "lastQueue");
 
 	    // MongoDB setup
 	    MongoClient mongoClient = new MongoClient("localhost");
         MongoDatabase database = mongoClient.getDatabase("hashtrendsDB");
         
         // get a handle to the collection with the hashtags in it
-        MongoCollection<Document> hashtagCollection = database.getCollection("hashranks");
+        MongoCollection<Document> hashranksColl = database.getCollection("hashranks");
         MongoCollection<Document> hashtagQueueColl = database.getCollection("hashtagQueue");
+        ListIndexesIterable<Document> indexDocsIt = hashranksColl.listIndexes();
         
-        Document hashtagQueueFilter = new Document ("info", "lastQueue");
-
-        // drop all the data in it
+        // drop all the data in it. TODO: decide if it's better to start from scratch
         //hashtagCollection.drop();
         
+        // TODO: parameters for expiration should be either in config file, passed in, or both
+        hashranksColl.createIndex(new Document ("creationDate",1), new IndexOptions().expireAfter((long)4, TimeUnit.HOURS));
+        // TODO: statement above must be changed to: "Instead use the collMod database command in conjunction with the index collection flag"
+        if (debug>=1) {
+            for (Document idx : indexDocsIt) {
+            	System.out.println ("Index: " + idx.toJson());
+            }
+        }
         
         // Populate persisted hashtag ranks
         try {
@@ -122,6 +131,7 @@ public class HashTrends {
         }
 
 	    // Do whatever needs to be done with messages
+        // TODO: capture Ctrl-C (TERM signal) to exit while loop gracefully
 	    while (stopping == false) {
 	      if (client.isDone()) {
 	        System.out.println("Client connection closed unexpectedly: " + client.getExitEvent().getMessage());
@@ -141,6 +151,7 @@ public class HashTrends {
 	        String[]        strArr = null;
 	        
 	        if (jText != null && jLang != null) {
+	        	//TODO: support choosing search params (like "lang") live
 	            if (jLang.asText().equals("en")) {
 //	            if (jText != null) {
 	                strArr = jText.asText().split("\\s+");
@@ -154,6 +165,7 @@ public class HashTrends {
 	                    }
 	                }
 	                
+	                // TODO: support rank stats of other information: geo-location
 	                if (jUser != null) {
 	                    if (debug >= 2) System.out.println (jUser.asText());
 	                    usernameRankQueue.offer(jUser.asText());
@@ -177,15 +189,15 @@ public class HashTrends {
 		                	printRankList(hashtagList, 40);
 	                	}
 
-	                	Document doc = new Document();
+	                	Document doc = new Document("creationDate", new Date(System.currentTimeMillis()));
 
 	                	for (int i = 0; i < 40 && i < hashtagList.size(); i++) {
 	                		doc.append(hashtagList.get(i).getKey().replace(".", ""), hashtagList.get(i).getValue());
 	                	}
-	                    hashtagCollection.insertOne(doc);
+	                	// TODO: Support aging out information after days, weeks, or maybe months, while saving stats
+	                    hashranksColl.insertOne(doc);
 	                    
-	                    //TODO: Find better way than changing to array then to list
-//	                    Document queueDoc = new Document ("lastQueue", Arrays.asList(hashtagRankQueue.toArray()));
+	                    // TODO: Find better way than changing to array then to list
 	                    hashtagQueueColl.findOneAndReplace(hashtagQueueFilter,
 	                    		new Document (hashtagQueueFilter).append("queueContents", Arrays.asList(hashtagRankQueue.toArray())));
 	                }
@@ -194,6 +206,7 @@ public class HashTrends {
 	      }
 	    }
 
+	    mongoClient.close();
 	    client.stop();
 
 	    // Print some stats
