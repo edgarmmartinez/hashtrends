@@ -28,9 +28,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mongodb.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
-import com.mongodb.DB;
-import org.bson.Document;
+import com.mongodb.operation.FindAndDeleteOperation;
 
+import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.isaseb.utils.TimedRankQueue;
 /**
  * @author edgar
@@ -91,13 +92,34 @@ public class HashTrends {
 
 	    // MongoDB setup
 	    MongoClient mongoClient = new MongoClient("localhost");
-        MongoDatabase database = mongoClient.getDatabase("hashtrends");
+        MongoDatabase database = mongoClient.getDatabase("hashtrendsDB");
         
-        // get a handle to the "test" collection
-        MongoCollection<Document> collection = database.getCollection("hashranks");
+        // get a handle to the collection with the hashtags in it
+        MongoCollection<Document> hashtagCollection = database.getCollection("hashranks");
+        MongoCollection<Document> hashtagQueueColl = database.getCollection("hashtagQueue");
+        
+        Document hashtagQueueFilter = new Document ("info", "lastQueue");
 
         // drop all the data in it
-        collection.drop();
+        //hashtagCollection.drop();
+        
+        
+        // Populate persisted hashtag ranks
+        try {
+//        	Document	initDoc = hashtagCollection.find().sort(new Document("_id", -1)).first();
+        	Document	initDoc = hashtagQueueColl.find(hashtagQueueFilter).first();
+        	if (debug >= 1) {
+                System.out.println("queueContents list: " + initDoc.get("queueContents").toString());
+        	}
+
+        	for (String hashStr : (List<String>) initDoc.get("queueContents")) {
+        		hashtagRankQueue.add(hashStr);
+        	}
+        } catch (NullPointerException e) {
+    		System.out.println("Empty database: " + e.getStackTrace());
+    		//Initialize queue database
+    		hashtagQueueColl.insertOne(hashtagQueueFilter);
+        }
 
 	    // Do whatever needs to be done with messages
 	    while (stopping == false) {
@@ -122,10 +144,12 @@ public class HashTrends {
 	            if (jLang.asText().equals("en")) {
 //	            if (jText != null) {
 	                strArr = jText.asText().split("\\s+");
-	                if (debug >= 1) System.out.println (jText.asText());
+	                if (debug >= 2)
+	                	System.out.println (jText.asText());
 	                for (int i = 0; i < strArr.length; i++) {
 	                    if (strArr[i].toCharArray() [0] == '#') {
-	                        if (debug >= 1) System.out.println (strArr[i]);
+	                        if (debug >= 2)
+	                        	System.out.println (strArr[i]);
 	                        hashtagRankQueue.offer(strArr[i]);
 	                    }
 	                }
@@ -136,8 +160,10 @@ public class HashTrends {
 	                }
 	                msgRead++;
 	                
-	                if (msgRead % 20 == 0) {
-	                	if (debug > 0) {
+                	List<Map.Entry<String,Integer>> hashtagList = hashtagRankQueue.getRank();
+
+                	if (msgRead % 20 == 0) {
+	                	if (debug >= 1) {
 		                    System.out.println ("-------------------------------------------");
 
 		                    if (hashtagRankQueue.size() < 50) {
@@ -147,25 +173,21 @@ public class HashTrends {
 		                    System.out.println(new SimpleDateFormat("yyyy/MM/dd HH:mm:ss").format(Calendar.getInstance().getTime()));
 		                	System.out.println("Number of hashtags in list: " + hashtagRankQueue.size());
 		                	System.out.println("Number of hashtags ranked: " + hashtagRankQueue.keyCount());
+		                	
+		                	printRankList(hashtagList, 40);
 	                	}
-	                	
-	                	List<Map.Entry<String,Integer>> list = hashtagRankQueue.getRank();
-	                	printRankList(list, 40);
 
-	                	// make a document and insert it into MongoDB
-/*	                    Document doc = new Document("name", "MongoDB")
-	                                   .append("type", "database")
-	                                   .append("count", 1)
-	                                   .append("info", new Document("x", 203).append("y", 102));
-*/
 	                	Document doc = new Document();
 
-	                	for (int i = 0; i < 40 && i < list.size(); i++) {
-	                		doc.append(list.get(i).getKey().replace(".", ""), list.get(i).getValue());
+	                	for (int i = 0; i < 40 && i < hashtagList.size(); i++) {
+	                		doc.append(hashtagList.get(i).getKey().replace(".", ""), hashtagList.get(i).getValue());
 	                	}
-
-//	                	Document doc = new Document(list.get(0).getKey(), list.get(0).getValue());
-	                    collection.insertOne(doc);
+	                    hashtagCollection.insertOne(doc);
+	                    
+	                    //TODO: Find better way than changing to array then to list
+//	                    Document queueDoc = new Document ("lastQueue", Arrays.asList(hashtagRankQueue.toArray()));
+	                    hashtagQueueColl.findOneAndReplace(hashtagQueueFilter,
+	                    		new Document (hashtagQueueFilter).append("queueContents", Arrays.asList(hashtagRankQueue.toArray())));
 	                }
 	            }
 	        }
