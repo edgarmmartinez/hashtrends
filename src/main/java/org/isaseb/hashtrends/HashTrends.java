@@ -106,7 +106,7 @@ public class HashTrends {
         
         // TODO: parameters for expiration should be either in config file, passed in, or both
         hashranksColl.createIndex(new Document ("creationDate",1), new IndexOptions().expireAfter((long)4, TimeUnit.HOURS));
-        // TODO: statement above must be changed to: "Instead use the collMod database command in conjunction with the index collection flag"
+        // TODO: statement above must be changed to: "Instead use the collMod database command in conjunction with the index collection flag" to avoid exceptions of creating already existing index
         if (debug>=1) {
             for (Document idx : indexDocsIt) {
             	System.out.println ("Index: " + idx.toJson());
@@ -114,6 +114,7 @@ public class HashTrends {
         }
         
         // Populate persisted hashtag ranks
+        // TODO: Only populate them if they were created within the last X minutes ("trendSec" seconds?)
         try {
 //        	Document	initDoc = hashtagCollection.find().sort(new Document("_id", -1)).first();
         	Document	initDoc = hashtagQueueColl.find(hashtagQueueFilter).first();
@@ -190,10 +191,18 @@ public class HashTrends {
 	                	}
 
 	                	Document doc = new Document("creationDate", new Date(System.currentTimeMillis()));
+//	                	Document hashrankList = new Document();
+	                	List<Document> list = new ArrayList<Document>(40);
 
 	                	for (int i = 0; i < 40 && i < hashtagList.size(); i++) {
-	                		doc.append(hashtagList.get(i).getKey().replace(".", ""), hashtagList.get(i).getValue());
+	                		Document entry = new Document("hash", hashtagList.get(i).getKey().replaceAll("[#.]", ""));
+	                		entry.append ("rank", hashtagList.get(i).getValue());
+	                		list.add(entry);
+//	                		hashrankList.append(hashtagList.get(i).getKey().replace(".", ""), hashtagList.get(i).getValue());
 	                	}
+	                	
+	                	doc.append("hashrankList", list);
+	                	
 	                	// TODO: Support aging out information after days, weeks, or maybe months, while saving stats
 	                    hashranksColl.insertOne(doc);
 	                    
