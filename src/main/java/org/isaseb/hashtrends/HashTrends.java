@@ -88,6 +88,7 @@ public class HashTrends {
 
 	    ObjectMapper mapper = new ObjectMapper();
 	    TimedRankQueue<String> hashtagRankQueue = new TimedRankQueue<String>(trendSec);
+/*	    TimedRankQueue<Document> hashDocRankQueue = new TimedRankQueue<Document>(trendSec);*/
 	    TimedRankQueue<String> usernameRankQueue = new TimedRankQueue<String>(10);
 
         Document hashtagQueueFilter = new Document ("info", "lastQueue");
@@ -99,6 +100,7 @@ public class HashTrends {
         // get a handle to the collection with the hashtags in it
         MongoCollection<Document> hashranksColl = database.getCollection("hashranks");
         MongoCollection<Document> hashtagQueueColl = database.getCollection("hashtagQueue");
+/*        MongoCollection<Document> hashDocQueueColl = database.getCollection("hashDocQueue");*/
         ListIndexesIterable<Document> indexDocsIt = hashranksColl.listIndexes();
         
         // drop all the data in it. TODO: decide if it's better to start from scratch
@@ -125,7 +127,11 @@ public class HashTrends {
         	for (String hashStr : (List<String>) initDoc.get("queueContents")) {
         		hashtagRankQueue.add(hashStr);
         	}
-        } catch (NullPointerException e) {
+        	
+/*        	for (Document hashDoc : (List<Document>) initDoc.get("queueContents")) {
+        		hashDocRankQueue.add(hashDoc);
+        	}
+*/        } catch (NullPointerException e) {
     		System.out.println("Empty database: " + e.getStackTrace());
     		//Initialize queue database
     		hashtagQueueColl.insertOne(hashtagQueueFilter);
@@ -134,96 +140,100 @@ public class HashTrends {
 	    // Do whatever needs to be done with messages
         // TODO: capture Ctrl-C (TERM signal) to exit while loop gracefully
 	    while (stopping == false) {
-	      if (client.isDone()) {
-	        System.out.println("Client connection closed unexpectedly: " + client.getExitEvent().getMessage());
-	        break;
-	      }
-
-	      String msg = queue.poll(5, TimeUnit.SECONDS);
-	      
-	      if (msg == null) {
-	        System.out.println("Did not receive a message in 5 seconds");
-	      } else {
+		    if (client.isDone()) {
+		      System.out.println("Client connection closed unexpectedly: " + client.getExitEvent().getMessage());
+		      break;
+		    }
+	
+		    String msg = queue.poll(5, TimeUnit.SECONDS);
+		      
+		    if (msg == null) {
+		      System.out.println("Did not receive a message in 5 seconds");
+		      continue;
+		    }
+		    
 	        JsonNode node = mapper.readTree(msg);
 
 	        JsonNode        jText = node.get("text");
+
+	        //TODO: support choosing search params (like "lang") live
+//	          if (jLang.asText().equals("en") == false) {
+	        if (jText == null) {
+	        	continue;
+	        }
+          
 	        JsonNode        jLang = node.get("lang");
 	        JsonNode        jUser = node.findValue("screen_name");
 	        String[]        strArr = null;
             HashSet<String> strSet = new HashSet<String>();
 	        
-	        if (jText != null && jLang != null) {
-	        	//TODO: support choosing search params (like "lang") live
-//	            if (jLang.asText().equals("en")) {
-	            if (jText != null) {
-	                strArr = jText.asText().split("\\s+");
-	                if (debug >= 2)
-	                	System.out.println (jText.asText());
-	                strSet.clear();
-	                for (int i = 0; i < strArr.length; i++) {
-	                	// Repeated hashtag in one message should count as one
-	                    if (strArr[i].toCharArray() [0] == '#') {
-	                        if (strSet.add(strArr[i])) {
-	                        	if (debug >= 2)
-	                        		System.out.println (strArr[i]);
-	                        hashtagRankQueue.offer(strArr[i]);
-	                        } else {
-	                        	if (debug >= 2)
-	                        		System.out.println (strArr[i] + " is repeated in this message");
-	                        }
-	                    }
-	                }
-	                
-	                // TODO: support rank stats of other information: geo-location
-	                if (jUser != null) {
-	                    if (debug >= 2) System.out.println (jUser.asText());
-	                    usernameRankQueue.offer(jUser.asText());
-	                }
-	                msgRead++;
-	                
-                	List<Map.Entry<String,Integer>> hashtagList = hashtagRankQueue.getRank();
+            strArr = jText.asText().split("\\s+");
+            if (debug >= 2)
+            	System.out.println (jText.asText());
+            
+            //extract message hashtags and add to rank queue
+            strSet.clear();
+            for (int i = 0; i < strArr.length; i++) {
+                if (strArr[i].toCharArray() [0] == '#') {
+                	String cleanHashString = strArr[i].replaceAll("[#.,]", "");
+                	// Repeated hashtag in one message should count as one
+                    if (strSet.add(cleanHashString)) {
+                    	if (debug >= 2)
+                    		System.out.println (cleanHashString);
+                    hashtagRankQueue.offer(cleanHashString);
+                    } else {
+                    	if (debug >= 2)
+                    		System.out.println (cleanHashString + " is repeated in this message");
+                    }
+                }
+            }
+            
+            // TODO: support rank stats of other information: geo-location
+            if (jUser != null) {
+                if (debug >= 2) System.out.println (jUser.asText());
+                usernameRankQueue.offer(jUser.asText());
+            }
+            msgRead++;
+            
+        	List<Map.Entry<String,Integer>> hashtagList = hashtagRankQueue.getRank();
 
-                	if (msgRead % 20 == 0) {
-	                	Document doc = new Document("creationDate", new Date(System.currentTimeMillis()));
-	                	List<Document> list = new ArrayList<Document>(40);
+        	if (msgRead % 20 == 0) {
+            	Document doc = new Document("creationDate", new Date(System.currentTimeMillis()));
+            	List<Document> list = new ArrayList<Document>(40);
 
-	                	// TODO: The number of entries to store should be configurable
-	                	for (int i = 0; i < 40 && i < hashtagList.size(); i++) {
-	                		String cleanHashStr = hashtagList.get(i).getKey().replaceAll("[#.]", "");
-	                		if (!cleanHashStr.equals("")) {
-		                		Document entry = new Document("hash", cleanHashStr);
-		                		entry.append ("rank", hashtagList.get(i).getValue());
-		                		entry.append("lang", jLang.asText());
-		                		list.add(entry);
-	                		}
-	                	}
-	                	
-	                	doc.append("hashrankList", list);
-	                	
-	                	// TODO: Support aging out information after days, weeks, or maybe months, while saving stats
-	                    hashranksColl.insertOne(doc);
-	                    
-	                    // TODO: Find better way than changing to array then to list
-	                    hashtagQueueColl.findOneAndReplace(hashtagQueueFilter,
-	                    		new Document (hashtagQueueFilter).append("queueContents", Arrays.asList(hashtagRankQueue.toArray())));
+            	// TODO: The number of entries to store should be configurable
+            	for (int i = 0; i < 40 && i < hashtagList.size(); i++) {
+            		String cleanHashStr = hashtagList.get(i).getKey().replaceAll("[#.]", "");
+            		if (!cleanHashStr.equals("")) {
+                		Document entry = new Document("hash", cleanHashStr);
+                		entry.append ("rank", hashtagList.get(i).getValue());
+                		list.add(entry);
+            		}
+            	}
+            	
+            	doc.append("hashrankList", list);
+            	
+            	// TODO: Support aging out information after days, weeks, or maybe months, while saving stats
+                hashranksColl.insertOne(doc);
+                
+                // TODO: Find better way than changing to array then to list
+                hashtagQueueColl.findOneAndReplace(hashtagQueueFilter,
+                		new Document (hashtagQueueFilter).append("queueContents", Arrays.asList(hashtagRankQueue.toArray())));
 
-	                    if (debug >= 1) {
-		                    System.out.println ("-------------------------------------------");
+                if (debug >= 1) {
+                    System.out.println ("-------------------------------------------");
 
-		                    if (hashtagRankQueue.size() < 50) {
-		                    	System.out.println("Hashtags in list: " + hashtagRankQueue.toString());
-		                	}
+                    if (hashtagRankQueue.size() < 50) {
+                    	System.out.println("Hashtags in list: " + hashtagRankQueue.toString());
+                	}
 
-		                    System.out.println(new SimpleDateFormat("yyyy/MM/dd HH:mm:ss").format(Calendar.getInstance().getTime()));
-		                	System.out.println("Number of hashtags in list: " + hashtagRankQueue.size());
-		                	System.out.println("Number of hashtags ranked: " + hashtagRankQueue.keyCount());
-		                	
-		                	printRankList(hashtagList, 40);
-	                	}
-	                }
-	            }
-	        }
-	      }
+                    System.out.println(new SimpleDateFormat("yyyy/MM/dd HH:mm:ss").format(Calendar.getInstance().getTime()));
+                	System.out.println("Number of hashtags in list: " + hashtagRankQueue.size());
+                	System.out.println("Number of hashtags ranked: " + hashtagRankQueue.keyCount());
+                	
+                	printRankList(hashtagList, 40);
+            	}
+            }
 	    }
 
 	    mongoClient.close();
