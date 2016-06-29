@@ -150,19 +150,27 @@ public class HashTrends {
 	        JsonNode        jLang = node.get("lang");
 	        JsonNode        jUser = node.findValue("screen_name");
 	        String[]        strArr = null;
+            HashSet<String> strSet = new HashSet<String>();
 	        
 	        if (jText != null && jLang != null) {
 	        	//TODO: support choosing search params (like "lang") live
-	            if (jLang.asText().equals("en")) {
-//	            if (jText != null) {
+//	            if (jLang.asText().equals("en")) {
+	            if (jText != null) {
 	                strArr = jText.asText().split("\\s+");
 	                if (debug >= 2)
 	                	System.out.println (jText.asText());
+	                strSet.clear();
 	                for (int i = 0; i < strArr.length; i++) {
+	                	// Repeated hashtag in one message should count as one
 	                    if (strArr[i].toCharArray() [0] == '#') {
-	                        if (debug >= 2)
-	                        	System.out.println (strArr[i]);
+	                        if (strSet.add(strArr[i])) {
+	                        	if (debug >= 2)
+	                        		System.out.println (strArr[i]);
 	                        hashtagRankQueue.offer(strArr[i]);
+	                        } else {
+	                        	if (debug >= 2)
+	                        		System.out.println (strArr[i] + " is repeated in this message");
+	                        }
 	                    }
 	                }
 	                
@@ -176,7 +184,30 @@ public class HashTrends {
                 	List<Map.Entry<String,Integer>> hashtagList = hashtagRankQueue.getRank();
 
                 	if (msgRead % 20 == 0) {
-	                	if (debug >= 1) {
+	                	Document doc = new Document("creationDate", new Date(System.currentTimeMillis()));
+	                	List<Document> list = new ArrayList<Document>(40);
+
+	                	// TODO: The number of entries to store should be configurable
+	                	for (int i = 0; i < 40 && i < hashtagList.size(); i++) {
+	                		String cleanHashStr = hashtagList.get(i).getKey().replaceAll("[#.]", "");
+	                		if (!cleanHashStr.equals("")) {
+		                		Document entry = new Document("hash", cleanHashStr);
+		                		entry.append ("rank", hashtagList.get(i).getValue());
+		                		entry.append("lang", jLang.asText());
+		                		list.add(entry);
+	                		}
+	                	}
+	                	
+	                	doc.append("hashrankList", list);
+	                	
+	                	// TODO: Support aging out information after days, weeks, or maybe months, while saving stats
+	                    hashranksColl.insertOne(doc);
+	                    
+	                    // TODO: Find better way than changing to array then to list
+	                    hashtagQueueColl.findOneAndReplace(hashtagQueueFilter,
+	                    		new Document (hashtagQueueFilter).append("queueContents", Arrays.asList(hashtagRankQueue.toArray())));
+
+	                    if (debug >= 1) {
 		                    System.out.println ("-------------------------------------------");
 
 		                    if (hashtagRankQueue.size() < 50) {
@@ -189,26 +220,6 @@ public class HashTrends {
 		                	
 		                	printRankList(hashtagList, 40);
 	                	}
-
-	                	Document doc = new Document("creationDate", new Date(System.currentTimeMillis()));
-//	                	Document hashrankList = new Document();
-	                	List<Document> list = new ArrayList<Document>(40);
-
-	                	for (int i = 0; i < 40 && i < hashtagList.size(); i++) {
-	                		Document entry = new Document("hash", hashtagList.get(i).getKey().replaceAll("[#.]", ""));
-	                		entry.append ("rank", hashtagList.get(i).getValue());
-	                		list.add(entry);
-//	                		hashrankList.append(hashtagList.get(i).getKey().replace(".", ""), hashtagList.get(i).getValue());
-	                	}
-	                	
-	                	doc.append("hashrankList", list);
-	                	
-	                	// TODO: Support aging out information after days, weeks, or maybe months, while saving stats
-	                    hashranksColl.insertOne(doc);
-	                    
-	                    // TODO: Find better way than changing to array then to list
-	                    hashtagQueueColl.findOneAndReplace(hashtagQueueFilter,
-	                    		new Document (hashtagQueueFilter).append("queueContents", Arrays.asList(hashtagRankQueue.toArray())));
 	                }
 	            }
 	        }
